@@ -61,11 +61,29 @@ def _flatten_text(nested, book: str) -> list[tuple[str, str]]:
 
 def parse_sefaria_file(filepath: str) -> list[dict]:
     path = Path(filepath)
-    book = path.stem
-    category = _infer_category(book)
 
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+
+    # --- New v3 API download format ---
+    if "sections" in data:
+        book = data.get("title", path.stem)
+        category = data.get("category") or _infer_category(book)
+        return [
+            {
+                "ref": s["ref"],
+                "book": book,
+                "text_he": _clean(s.get("he", "")),
+                "text_en": _clean(s.get("en", "")),
+                "category": category,
+            }
+            for s in data["sections"]
+            if _clean(s.get("he", ""))
+        ]
+
+    # --- Legacy Sefaria export format ---
+    book = path.stem
+    category = _infer_category(book)
 
     he_pairs = _flatten_text(data.get("text", []), book)
 

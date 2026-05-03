@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Depends, Query
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db import init_db, get_db
@@ -13,6 +15,11 @@ def startup():
     init_db()
 
 
+@app.get("/")
+def root():
+    return FileResponse("app/static/index.html")
+
+
 @app.get("/search", response_model=list[SearchResult])
 def search(
     q: str = Query(..., description="Search query"),
@@ -25,3 +32,6 @@ def search(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
