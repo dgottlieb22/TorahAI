@@ -43,11 +43,12 @@ ALL_COLLECTIONS = [
 ]
 
 # Category paths to match in the table of contents for dynamic collections
+# Each matcher takes a (category_path, title) and returns True if the book should be included
 TOC_CATEGORY_MATCHERS = {
-    "mishneh_torah": lambda cats: "Mishneh Torah" in cats and "Halakhah" in cats,
-    "shulchan_arukh": lambda cats: "Shulchan Arukh" in cats and "Halakhah" in cats,
-    "mishnah_berurah": lambda cats: "Mishnah Berurah" in cats,
-    "yerushalmi": lambda cats: "Yerushalmi" in cats and "Talmud" in cats,
+    "mishneh_torah": lambda path, title: "Mishneh Torah" in path and title.startswith("Mishneh Torah,"),
+    "shulchan_arukh": lambda path, title: "Shulchan Arukh" in path and title.startswith("Shulchan Arukh"),
+    "mishnah_berurah": lambda path, title: "Mishnah Berurah" in path and title in ("Mishnah Berurah", "Biur Halacha"),
+    "yerushalmi": lambda path, title: "Yerushalmi" in path and title.startswith("Jerusalem Talmud"),
 }
 
 
@@ -77,7 +78,7 @@ def get_shape(title: str) -> list | None:
 def fetch_section(ref: str) -> dict | None:
     """Fetch a single section with both source and translation."""
     encoded = urllib.parse.quote(ref, safe="")
-    return api_get(f"/api/v3/texts/{encoded}?version=source,translation&return_format=text_only")
+    return api_get(f"/api/v3/texts/{encoded}?version=source&version=translation&return_format=text_only")
 
 
 def extract_verses(data: dict, ref_prefix: str) -> list[dict]:
@@ -136,52 +137,41 @@ def download_book(title: str, category: str, section_refs: list[str]) -> dict:
 
 
 def make_section_refs_from_shape(title: str, shape_data) -> list[str]:
-    """Build section refs from shape API response."""
+    """Build section refs from shape API response.
+
+    Shape API returns: [{"title": "Genesis", "length": 50, "chapters": [31, 25, ...], ...}]
+    length = number of chapters, chapters = verse counts per chapter.
+    """
     refs = []
-    if isinstance(shape_data, list) and len(shape_data) > 0:
-        # Shape returns a list of section objects or a nested structure
-        section = shape_data[0] if isinstance(shape_data[0], dict) else shape_data
-        if isinstance(section, dict):
-            chapters = section.get("section", [])
-            if isinstance(chapters, list):
-                for i, _ in enumerate(chapters):
-                    refs.append(f"{title}.{i + 1}")
-    if not refs:
-        # Fallback: try treating shape_data as a flat list of counts
-        if isinstance(shape_data, list):
-            for i in range(len(shape_data)):
-                refs.append(f"{title}.{i + 1}")
+    if isinstance(shape_data, list) and shape_data and isinstance(shape_data[0], dict):
+        length = shape_data[0].get("length", 0)
+        for i in range(1, length + 1):
+            refs.append(f"{title}.{i}")
     return refs
 
 
 def make_talmud_refs(title: str, shape_data) -> list[str]:
-    """Build daf refs for Talmud tractates (2a, 2b, 3a, 3b, ...)."""
+    """Build daf refs for Talmud tractates (2a, 2b, 3a, 3b, ...).
+
+    Shape API returns chapters array where each entry is line count per amud.
+    Index 0 = placeholder (no daf 1a), index 1 = placeholder (no daf 1b),
+    index 2 = daf 2a, index 3 = daf 2b, etc.
+    We skip amudim with 0 lines.
+    """
     refs = []
-    # Shape for Talmud gives us the number of amudim (pages)
-    length = 0
-    if isinstance(shape_data, list) and len(shape_data) > 0:
-        section = shape_data[0] if isinstance(shape_data[0], dict) else None
-        if section:
-            sec = section.get("section", [])
-            length = len(sec) if isinstance(sec, list) else 0
-        else:
-            length = len(shape_data)
+    chapters = []
+    if isinstance(shape_data, list) and shape_data and isinstance(shape_data[0], dict):
+        chapters = shape_data[0].get("chapters", [])
 
-    if length == 0:
-        # Fallback: try a reasonable range
-        length = 200
+    if not chapters:
+        return refs
 
-    # Talmud pages: 2a, 2b, 3a, 3b, ... up to the length
-    # Each daf has 2 amudim, starting from daf 2
-    daf = 2
-    amud = "a"
-    for _ in range(length):
+    for idx, count in enumerate(chapters):
+        if count == 0:
+            continue
+        daf = idx // 2 + 1
+        amud = "a" if idx % 2 == 0 else "b"
         refs.append(f"{title}.{daf}{amud}")
-        if amud == "a":
-            amud = "b"
-        else:
-            amud = "a"
-            daf += 1
     return refs
 
 
@@ -245,7 +235,7 @@ def download_bavli():
 
 
 def find_books_in_toc(toc: list, matcher, category_path: list | None = None) -> list[str]:
-    """Recursively walk the TOC to find book titles matching a category predicate."""
+    """Recursively walk the TOC to find book titles matching a predicate."""
     if category_path is None:
         category_path = []
     titles = []
@@ -253,13 +243,18 @@ def find_books_in_toc(toc: list, matcher, category_path: list | None = None) -> 
         if isinstance(node, dict):
             cat = node.get("category", "")
             current_path = category_path + ([cat] if cat else [])
-            # If this node has contents (subcategories or books), recurse
             if "contents" in node:
                 titles.extend(find_books_in_toc(node["contents"], matcher, current_path))
-            # If this is a leaf node (a book), check if it matches
-            elif "title" in node and matcher(current_path):
+            elif "title" in node and matcher(current_path, node["title"]):
                 titles.append(node["title"])
-    return titles
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for t in titles:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+    return unique
 
 
 def download_toc_collection(collection_name: str, category_label: str, is_talmud: bool = False):
@@ -271,7 +266,7 @@ def download_toc_collection(collection_name: str, category_label: str, is_talmud
         return
 
     print("  Fetching table of contents...")
-    toc = api_get("/api/table-of-contents")
+    toc = api_get("/api/index/")
     time.sleep(DELAY)
     if not toc:
         print("  Failed to fetch TOC")
