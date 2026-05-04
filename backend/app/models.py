@@ -5,6 +5,9 @@ from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
 
 
+from app.config import settings
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -32,7 +35,7 @@ class SourceEmbedding(Base):
 
     chunk_id = Column(UUID(as_uuid=True), ForeignKey("source_chunks.id"), primary_key=True)
     embedding_model = Column(Text, primary_key=True)
-    embedding = Column(Vector(1536))
+    embedding = Column(Vector(settings.embedding_dim))
     embedding_text_hash = Column(Text)
 
     __table_args__ = (

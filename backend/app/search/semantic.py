@@ -1,7 +1,7 @@
 from sqlalchemy import text as sql_text
 
 from app.db import SessionLocal
-from app.embeddings.embedder import embed
+from app.embeddings.embedder import embed_query
 
 
 def semantic_search(query: str, limit: int = 20, session=None) -> list[dict]:
@@ -9,7 +9,7 @@ def semantic_search(query: str, limit: int = 20, session=None) -> list[dict]:
     if own_session:
         session = SessionLocal()
     try:
-        embedding_vector = embed(query)
+        embedding_vector = embed_query(query)
         rows = session.execute(
             sql_text("""
                 SELECT c.ref, c.text_he, c.text_en,
